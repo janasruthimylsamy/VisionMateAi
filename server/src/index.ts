@@ -6,12 +6,13 @@ import cors from 'cors';
 const app = express();
 
 const port = Number(process.env.PORT || 3000);
-const apiKey = process.env.GEMINI_API_KEY || '';
-const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const apiKey = process.env.OLLAMA_API_KEY || '';
+const model = process.env.OLLAMA_MODEL || 'qwen3-vl:235b-cloud';
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json({ limit: '12mb' }));
 
+// Home route
 app.get('/', (_req, res) => {
   res.json({
     service: 'VisionMate AI API',
@@ -19,17 +20,19 @@ app.get('/', (_req, res) => {
   });
 });
 
+// Health check
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'VisionMate AI API',
-    provider: 'Google Gemini',
+    provider: 'Ollama Cloud',
     aiConfigured: Boolean(apiKey),
     model,
     port
   });
 });
 
+// AI instructions
 const instructions = `You are VisionMate, a concise, respectful, safety-first voice assistant for blind and low-vision people.
 
 Speak in the user's requested language.
@@ -41,7 +44,8 @@ Do not claim to detect every obstacle or guarantee physical safety.
 For medicine, chemicals, food safety, financial or other high-stakes questions, clearly state limitations and recommend checking the original label or a qualified person.
 Do not pretend to be human.`;
 
-async function askGemini(
+// Ollama Cloud AI function
+async function askOllama(
   prompt: string,
   systemInstruction: string = instructions,
   image?: {
@@ -50,39 +54,38 @@ async function askGemini(
   }
 ): Promise<string> {
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured.');
+    throw new Error('OLLAMA_API_KEY is not configured.');
   }
 
-  const parts: any[] = [{ text: prompt }];
+  const userMessage: any = {
+    role: 'user',
+    content: prompt
+  };
 
+  // Attach image for vision models
   if (image) {
-    parts.push({
-      inlineData: {
-        mimeType: image.mimeType,
-        data: image.imageBase64
-      }
-    });
+    userMessage.images = [image.imageBase64];
   }
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    'https://ollama.com/api/chat',
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey
+        Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: systemInstruction }]
-        },
-        contents: [
+        model,
+        messages: [
           {
-            role: 'user',
-            parts
-          }
+            role: 'system',
+            content: systemInstruction
+          },
+          userMessage
         ],
-        generationConfig: {
+        stream: false,
+        options: {
           temperature: 0.3
         }
       }),
@@ -94,22 +97,21 @@ async function askGemini(
 
   if (!response.ok) {
     console.error(
-      'Gemini API error:',
-      data?.error?.message || response.status
+      'Ollama API error:',
+      data?.error || response.status
     );
 
     throw new Error(
-      data?.error?.message || `Gemini request failed: ${response.status}`
+      data?.error || `Ollama request failed: ${response.status}`
     );
   }
 
-  const answer = data?.candidates?.[0]?.content?.parts
-    ?.map((part: any) => part.text || '')
-    .join('')
-    .trim();
+  const answer = String(
+    data?.message?.content || ''
+  ).trim();
 
   if (!answer) {
-    throw new Error('Gemini returned an empty response.');
+    throw new Error('Ollama returned an empty response.');
   }
 
   return answer;
@@ -149,7 +151,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// Chat endpoint
+// AI Chat endpoint
 app.post('/api/chat', async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim();
@@ -169,7 +171,7 @@ app.post('/api/chat', async (req, res) => {
       return;
     }
 
-    const answer = await askGemini(
+    const answer = await askOllama(
       `Respond in language locale: ${language}.\n\nUser message: ${message}`
     );
 
@@ -192,9 +194,11 @@ function prepareImageData(
   mimeType: string;
 } {
   let imageBase64 = String(imageInput || '').trim();
-  let mimeType = String(suppliedMimeType || 'image/jpeg').toLowerCase();
+  let mimeType = String(
+    suppliedMimeType || 'image/jpeg'
+  ).toLowerCase();
 
-  // Accept a complete data URL or plain Base64
+  // Accept complete data URL or plain Base64
   if (imageBase64.startsWith('data:')) {
     const match = imageBase64.match(
       /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i
@@ -208,8 +212,12 @@ function prepareImageData(
     imageBase64 = match[2];
   }
 
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
-    throw new Error('Unsupported image format. Use JPEG, PNG or WebP.');
+  if (
+    !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)
+  ) {
+    throw new Error(
+      'Unsupported image format. Use JPEG, PNG or WebP.'
+    );
   }
 
   imageBase64 = imageBase64.replace(/\s/g, '');
@@ -231,7 +239,9 @@ function prepareImageData(
   }
 
   if (imageBuffer.length > 7 * 1024 * 1024) {
-    throw new Error('Image is too large. Please capture a smaller image.');
+    throw new Error(
+      'Image is too large. Please capture a smaller image.'
+    );
   }
 
   // Verify actual image format
@@ -309,7 +319,7 @@ Do not guess brand, ingredients, expiry date, medicine identity or safety-critic
 Keep the spoken response concise and practical.
 Never claim the image can establish whether an area is safe to walk through.`;
 
-    const description = await askGemini(
+    const description = await askOllama(
       prompt,
       instructions,
       image
@@ -354,7 +364,7 @@ Task: Extract and transcribe the visible text in this image.
 Requested language/locale: ${language}.
 
 Rules:
-- Return only the text that is actually visible in the image.
+- Return only the text that is actually visible in this image.
 - Preserve the original language and wording. Do not translate.
 - Preserve paragraph breaks and useful line breaks.
 - Include headings, labels, numbers and punctuation when legible.
@@ -365,7 +375,7 @@ Rules:
 - If no readable text is visible, return exactly: NO_READABLE_TEXT
 - Do not add an introduction or a conclusion.`;
 
-    const extractedText = await askGemini(
+    const extractedText = await askOllama(
       prompt,
       'You accurately transcribe text from supplied images. Never invent missing text.',
       image
@@ -405,8 +415,9 @@ Rules:
   }
 });
 
+// Start server
 app.listen(port, () => {
   console.log(`VisionMate API listening on port ${port}`);
-  console.log('AI provider: Google Gemini');
+  console.log('AI provider: Ollama Cloud');
   console.log(`AI model: ${model}`);
 });
