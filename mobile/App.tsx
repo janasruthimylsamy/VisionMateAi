@@ -1,22 +1,38 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet,
-  Text, TextInput, TouchableOpacity, View, ActivityIndicator, Platform
+  Alert,
+  Linking,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  ActivityIndicator,
+  Platform
 } from 'react-native';
+
 import * as Speech from 'expo-speech';
 import * as SecureStore from 'expo-secure-store';
 import * as Location from 'expo-location';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent
 } from 'expo-speech-recognition';
 
-// PUBLIC BACKEND URL
-const API_BASE =
+// --------------------------------------------------
+// CONFIGURATION
+// --------------------------------------------------
+
+const API_BASE = (
   process.env.EXPO_PUBLIC_API_BASE_URL ||
-  'https://visionmateai-server.vercel.app';
+  'https://visionmateai-server.vercel.app'
+).replace(/\/+$/, '');
 
 const languages = [
   { code: 'en-IN', name: 'English' },
@@ -66,9 +82,15 @@ const COLORS = {
   success: '#397B62'
 };
 
+// --------------------------------------------------
+// MAIN APPLICATION
+// --------------------------------------------------
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('home');
+
   const [language, setLanguage] = useState('en-IN');
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -79,23 +101,31 @@ export default function App() {
 
   const cameraRef = useRef<CameraView>(null);
 
+  const [cameraReady, setCameraReady] = useState(false);
+
   const [scanBusy, setScanBusy] = useState(false);
   const [lastResult, setLastResult] = useState('');
 
-  // READ TEXT / OCR STATE
   const [readText, setReadText] = useState('');
   const [readBusy, setReadBusy] = useState(false);
 
   const [destination, setDestination] = useState('');
+
   const [contact, setContact] = useState('');
   const [contactSaved, setContactSaved] = useState('');
+
   const [sosNotice, setSosNotice] = useState('');
 
   const selectedLanguage =
     languages.find(item => item.code === language) || languages[0];
 
+  // --------------------------------------------------
   // SPEECH OUTPUT
+  // --------------------------------------------------
+
   const speak = (text: string) => {
+    if (!text.trim()) return;
+
     Speech.stop();
 
     Speech.speak(text, {
@@ -105,10 +135,17 @@ export default function App() {
     });
   };
 
+  // --------------------------------------------------
   // SPEECH RECOGNITION EVENTS
-  useSpeechRecognitionEvent('start', () => setListening(true));
+  // --------------------------------------------------
 
-  useSpeechRecognitionEvent('end', () => setListening(false));
+  useSpeechRecognitionEvent('start', () => {
+    setListening(true);
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setListening(false);
+  });
 
   useSpeechRecognitionEvent('error', (event: any) => {
     setListening(false);
@@ -140,7 +177,10 @@ export default function App() {
     }
   });
 
+  // --------------------------------------------------
   // INITIAL SETUP
+  // --------------------------------------------------
+
   useEffect(() => {
     if (Platform.OS !== 'web') {
       SecureStore.getItemAsync('trusted_contact')
@@ -151,7 +191,7 @@ export default function App() {
     }
 
     speak(
-      'Welcome to VisionMate AI. Your voice, your vision, your independence. Select Talk to AI, Scan an object, or Navigate.'
+      'Welcome to VisionMate AI. Select Talk to AI, Scan an object, or Navigate.'
     );
 
     return () => {
@@ -163,7 +203,15 @@ export default function App() {
     };
   }, []);
 
+  // Reset camera readiness when changing screens.
+  useEffect(() => {
+    setCameraReady(false);
+  }, [tab]);
+
+  // --------------------------------------------------
   // VOICE INPUT
+  // --------------------------------------------------
+
   const startListening = async () => {
     try {
       const permission =
@@ -188,34 +236,83 @@ export default function App() {
     }
   };
 
+  // --------------------------------------------------
   // BACKEND CONNECTION
+  // --------------------------------------------------
+
   const callApi = async (path: string, body: any) => {
-    const response = await fetch(`${API_BASE}${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
+    const controller = new AbortController();
 
-    const data = await response.json();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, 100000);
 
-    if (!response.ok) {
-      throw new Error(
-        data.error || 'The service could not complete your request.'
-      );
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+
+      const responseText = await response.text();
+
+      let data: any;
+
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(
+          `Server returned an invalid response (${response.status}).`
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || `Server error: ${response.status}`
+        );
+      }
+
+      return data;
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error(
+          'The AI request timed out. Please try again.'
+        );
+      }
+
+      if (
+        error instanceof TypeError ||
+        error?.message === 'Network request failed'
+      ) {
+        throw new Error(
+          'Cannot connect to VisionMate server. Check your internet connection and backend deployment.'
+        );
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return data;
   };
 
+  // --------------------------------------------------
   // AI CHAT
+  // --------------------------------------------------
+
   const askAI = async (text: string) => {
-    if (!text.trim() || busy) return;
+    const question = text.trim();
+
+    if (!question || busy) return;
 
     const next = [
       ...messages,
-      { role: 'user' as const, text: text.trim() }
+      {
+        role: 'user' as const,
+        text: question
+      }
     ];
 
     setMessages(next);
@@ -224,29 +321,36 @@ export default function App() {
 
     try {
       const data = await callApi('/api/chat', {
-        message: text.trim(),
+        message: question,
         language
       });
 
       const answer = String(
-        data.answer || 'I could not prepare an answer. Please try again.'
+        data.answer ||
+        'I could not prepare an answer. Please try again.'
       );
 
       setMessages([
         ...next,
-        { role: 'assistant', text: answer }
+        {
+          role: 'assistant',
+          text: answer
+        }
       ]);
 
       speak(answer);
     } catch (error: any) {
       const message =
-        `I cannot reach the AI service. ${
-          error.message || 'Check your server settings.'
+        `I could not reach the AI service. ${
+          error?.message || 'Please try again.'
         }`;
 
       setMessages([
         ...next,
-        { role: 'assistant', text: message }
+        {
+          role: 'assistant',
+          text: message
+        }
       ]);
 
       speak(message);
@@ -255,7 +359,10 @@ export default function App() {
     }
   };
 
+  // --------------------------------------------------
   // VOICE COMMANDS
+  // --------------------------------------------------
+
   const handleVoiceCommand = (text: string) => {
     const lower = text.toLowerCase();
 
@@ -264,55 +371,79 @@ export default function App() {
       lower.includes('what is this') ||
       lower.includes('identify')
     ) {
-      setTab('scan');
-      speak('Opening the object scanner.');
+      navigateTo('scan', 'Object scanner');
     } else if (
       lower.includes('navigate') ||
       lower.includes('take me') ||
       lower.includes('direction')
     ) {
-      setTab('navigate');
-      speak('Opening navigation. Tell me your destination.');
+      navigateTo('navigate', 'Navigation');
     } else if (lower.includes('read')) {
-      setTab('read');
-      speak('Opening the text reader.');
+      navigateTo('read', 'Read text');
     } else if (
       lower.includes('emergency') ||
       lower.includes('help me')
     ) {
-      setTab('safety');
-      speak('Opening emergency assistance.');
+      navigateTo('safety', 'Emergency assistance');
     } else {
       setTab('talk');
       askAI(text);
     }
   };
 
-  // CAMERA OBJECT RECOGNITION
-  const scanObject = async () => {
-    if (!cameraPermission?.granted) {
-      const permission = await requestCameraPermission();
+  // --------------------------------------------------
+  // CAMERA PERMISSION
+  // --------------------------------------------------
 
-      if (!permission.granted) {
-        speak('Camera permission was not granted.');
-        return;
-      }
+  const ensureCameraPermission = async () => {
+    if (cameraPermission?.granted) {
+      return true;
+    }
+
+    const permission = await requestCameraPermission();
+
+    if (!permission.granted) {
+      speak('Camera permission was not granted.');
+      return false;
+    }
+
+    return true;
+  };
+
+  // --------------------------------------------------
+  // CAMERA OBJECT RECOGNITION
+  // --------------------------------------------------
+
+  const scanObject = async () => {
+    if (scanBusy) return;
+
+    const permitted = await ensureCameraPermission();
+
+    if (!permitted) return;
+
+    if (!cameraReady || !cameraRef.current) {
+      speak('Camera is still starting. Please wait a moment.');
+      return;
     }
 
     try {
       setScanBusy(true);
+      setLastResult('');
 
-      const photo =
-        await cameraRef.current?.takePictureAsync({
-          quality: 0.65,
-          base64: true
-        });
+      speak('Capturing the image. Please wait.');
+
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.65,
+        base64: true
+      });
 
       if (!photo?.base64) {
-        throw new Error('Could not capture the image.');
+        throw new Error(
+          'Could not capture the image. Please try again.'
+        );
       }
 
-      speak('Image captured. I am analysing it. Please wait.');
+      speak('Image captured. Analysing it now.');
 
       const data = await callApi('/api/describe-image', {
         imageBase64: photo.base64,
@@ -322,37 +453,40 @@ export default function App() {
 
       const description = String(
         data.description ||
-          'I could not identify the object clearly.'
+        'I could not identify the object clearly.'
       );
 
       setLastResult(description);
+
       speak(description);
     } catch (error: any) {
       const message =
         `I could not analyse this image. ${
-          error.message || 'Please try again.'
+          error?.message || 'Please try again.'
         }`;
 
       setLastResult(message);
+
       speak(message);
     } finally {
       setScanBusy(false);
     }
   };
 
+  // --------------------------------------------------
   // CAMERA TEXT RECOGNITION / OCR
+  // --------------------------------------------------
+
   const scanText = async () => {
     if (readBusy) return;
 
-    if (!cameraPermission?.granted) {
-      const permission = await requestCameraPermission();
+    const permitted = await ensureCameraPermission();
 
-      if (!permission.granted) {
-        speak(
-          'Camera permission is required to scan printed text.'
-        );
-        return;
-      }
+    if (!permitted) return;
+
+    if (!cameraReady || !cameraRef.current) {
+      speak('Camera is still starting. Please wait a moment.');
+      return;
     }
 
     try {
@@ -361,17 +495,18 @@ export default function App() {
 
       speak('Capturing the page. Please hold your phone steady.');
 
-      const photo =
-        await cameraRef.current?.takePictureAsync({
-          quality: 0.65,
-          base64: true
-        });
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.65,
+        base64: true
+      });
 
       if (!photo?.base64) {
-        throw new Error('Could not capture the image. Please try again.');
+        throw new Error(
+          'Could not capture the image. Please try again.'
+        );
       }
 
-      speak('Image captured. Extracting the text. Please wait.');
+      speak('Image captured. Extracting the text.');
 
       const data = await callApi('/api/read-text', {
         imageBase64: photo.base64,
@@ -384,7 +519,7 @@ export default function App() {
       if (!extractedText) {
         const message =
           data.message ||
-          'No readable text was found. Try again with better lighting and focus.';
+          'No readable text was found. Try better lighting and focus.';
 
         setReadText('');
         speak(message);
@@ -394,22 +529,26 @@ export default function App() {
       setReadText(extractedText);
 
       speak(
-        'Text extraction is complete. The extracted text is displayed on your screen. Press Read aloud to listen.'
+        'Text extraction is complete. Press Read text aloud to listen.'
       );
     } catch (error: any) {
       const message =
         `I could not extract the text. ${
-          error.message || 'Please try again.'
+          error?.message || 'Please try again.'
         }`;
 
       speak(message);
+
       Alert.alert('Text extraction failed', message);
     } finally {
       setReadBusy(false);
     }
   };
 
+  // --------------------------------------------------
   // WALKING DIRECTIONS
+  // --------------------------------------------------
+
   const openWalkingDirections = async () => {
     if (!destination.trim()) {
       speak('Please enter or say a destination first.');
@@ -422,7 +561,7 @@ export default function App() {
 
       if (permission.status !== 'granted') {
         speak(
-          'Location permission is needed to start directions. You can enable it in Android settings.'
+          'Location permission is needed to start directions.'
         );
         return;
       }
@@ -439,18 +578,21 @@ export default function App() {
         `&travelmode=walking`;
 
       speak(
-        `Opening walking directions to ${destination} in Google Maps. Follow its spoken directions and use your usual mobility aid.`
+        `Opening walking directions to ${destination} in Google Maps. Follow spoken directions and use your usual mobility aid.`
       );
 
       await Linking.openURL(url);
     } catch {
       speak(
-        'I could not get your location or open maps. Please check location and internet settings.'
+        'I could not get your location or open maps. Check your location and internet settings.'
       );
     }
   };
 
+  // --------------------------------------------------
   // EMERGENCY DIALER
+  // --------------------------------------------------
+
   const openEmergencyDialer = async (number: string) => {
     if (Platform.OS === 'web') {
       const message =
@@ -471,6 +613,7 @@ export default function App() {
 
         setSosNotice(message);
         speak(message);
+
         Alert.alert('Calling unavailable', message);
         return;
       }
@@ -486,6 +629,7 @@ export default function App() {
 
       setSosNotice(message);
       speak(message);
+
       Alert.alert('Unable to open dialer', message);
     }
   };
@@ -507,7 +651,7 @@ export default function App() {
 
     if (Platform.OS === 'web') {
       const message =
-        `Your trusted contact is ${contactSaved}. Browser preview cannot place a call. Use your phone dialer to call this number.`;
+        `Your trusted contact is ${contactSaved}. Use your phone dialer to call this number.`;
 
       setSosNotice(message);
       speak(message);
@@ -558,7 +702,10 @@ export default function App() {
     );
   };
 
+  // --------------------------------------------------
   // REUSABLE UI COMPONENTS
+  // --------------------------------------------------
+
   const Header = ({
     title,
     desc
@@ -642,11 +789,15 @@ export default function App() {
   );
 
   const navigateTo = (nextTab: Tab, label: string) => {
+    setCameraReady(false);
     setTab(nextTab);
     speak(`${label} screen`);
   };
 
+  // --------------------------------------------------
   // MAIN SCREEN
+  // --------------------------------------------------
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar
@@ -655,6 +806,7 @@ export default function App() {
       />
 
       {/* TOP BRAND HEADER */}
+
       <View style={styles.topbar}>
         <View style={styles.brandRow}>
           <View style={styles.brandLogo}>
@@ -676,9 +828,7 @@ export default function App() {
           accessible
           accessibilityRole="button"
           accessibilityLabel="Read current screen aloud"
-          onPress={() =>
-            speak(`VisionMate AI. ${tab} screen.`)
-          }
+          onPress={() => speak(`VisionMate AI. ${tab} screen.`)}
           style={styles.speaker}
         >
           <Text style={styles.speakerText}>◖))</Text>
@@ -691,6 +841,7 @@ export default function App() {
         showsVerticalScrollIndicator={false}
       >
         {/* HOME */}
+
         {tab === 'home' && (
           <>
             <View style={styles.welcomeRow}>
@@ -744,6 +895,7 @@ export default function App() {
                 <Text style={styles.voiceHeroFooterText}>
                   TAP TO START A CONVERSATION
                 </Text>
+
                 <Text style={styles.voiceHeroFooterIcon}>●</Text>
               </View>
             </TouchableOpacity>
@@ -827,6 +979,7 @@ export default function App() {
         )}
 
         {/* TALK TO AI */}
+
         {tab === 'talk' && (
           <>
             <Header
@@ -894,7 +1047,9 @@ export default function App() {
                       accessibilityLabel="Repeat response"
                       onPress={() => speak(message.text)}
                     >
-                      <Text style={styles.repeat}>◖))  Listen again</Text>
+                      <Text style={styles.repeat}>
+                        ◖)) Listen again
+                      </Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -920,7 +1075,9 @@ export default function App() {
 
             <Button
               title={
-                listening ? 'Stop listening' : '♫  Speak to VisionMate'
+                listening
+                  ? 'Stop listening'
+                  : '♫ Speak to VisionMate'
               }
               onPress={() =>
                 listening
@@ -939,6 +1096,7 @@ export default function App() {
         )}
 
         {/* OBJECT SCANNER */}
+
         {tab === 'scan' && (
           <>
             <Header
@@ -960,9 +1118,11 @@ export default function App() {
             <View style={styles.cameraWrap}>
               {cameraPermission?.granted ? (
                 <CameraView
+                  key="object-camera"
                   ref={cameraRef}
                   style={styles.camera}
-                  facing="back"
+                  facing={Platform.OS === 'web' ? 'front' : 'back'}
+                  onCameraReady={() => setCameraReady(true)}
                 />
               ) : (
                 <View style={styles.cameraPlaceholder}>
@@ -984,6 +1144,12 @@ export default function App() {
               )}
             </View>
 
+            {!cameraReady && cameraPermission?.granted && (
+              <Text style={styles.cameraStatus}>
+                Starting camera. Please wait...
+              </Text>
+            )}
+
             <Button
               title={
                 scanBusy
@@ -991,7 +1157,7 @@ export default function App() {
                   : 'Capture and describe'
               }
               onPress={scanObject}
-              disabled={scanBusy}
+              disabled={scanBusy || !cameraReady}
             />
 
             {scanBusy && (
@@ -1012,10 +1178,12 @@ export default function App() {
                   What I can see
                 </Text>
 
-                <Text style={styles.message}>{lastResult}</Text>
+                <Text style={styles.message}>
+                  {lastResult}
+                </Text>
 
                 <Button
-                  title="◖))  Read description aloud"
+                  title="◖)) Read description aloud"
                   secondary
                   onPress={() => speak(lastResult)}
                 />
@@ -1031,6 +1199,7 @@ export default function App() {
         )}
 
         {/* NAVIGATION */}
+
         {tab === 'navigate' && (
           <>
             <Header
@@ -1050,7 +1219,9 @@ export default function App() {
               </Text>
             </View>
 
-            <Text style={styles.fieldLabel}>YOUR DESTINATION</Text>
+            <Text style={styles.fieldLabel}>
+              YOUR DESTINATION
+            </Text>
 
             <TextInput
               value={destination}
@@ -1062,7 +1233,7 @@ export default function App() {
             />
 
             <Button
-              title="♫  Say destination"
+              title="♫ Say destination"
               onPress={() => {
                 speak('Please say your destination.');
                 startListening();
@@ -1092,6 +1263,7 @@ export default function App() {
         )}
 
         {/* READ TEXT / OCR */}
+
         {tab === 'read' && (
           <>
             <Header
@@ -1113,14 +1285,18 @@ export default function App() {
               </Text>
             </View>
 
-            <Text style={styles.fieldLabel}>CAMERA SCANNER</Text>
+            <Text style={styles.fieldLabel}>
+              CAMERA SCANNER
+            </Text>
 
             <View style={styles.cameraWrap}>
               {cameraPermission?.granted ? (
                 <CameraView
+                  key="text-camera"
                   ref={cameraRef}
                   style={styles.camera}
-                  facing="back"
+                  facing={Platform.OS === 'web' ? 'front' : 'back'}
+                  onCameraReady={() => setCameraReady(true)}
                 />
               ) : (
                 <View style={styles.cameraPlaceholder}>
@@ -1142,6 +1318,12 @@ export default function App() {
               )}
             </View>
 
+            {!cameraReady && cameraPermission?.granted && (
+              <Text style={styles.cameraStatus}>
+                Starting camera. Please wait...
+              </Text>
+            )}
+
             <Button
               title={
                 readBusy
@@ -1149,7 +1331,7 @@ export default function App() {
                   : 'Capture page and extract text'
               }
               onPress={scanText}
-              disabled={readBusy}
+              disabled={readBusy || !cameraReady}
             />
 
             {readBusy && (
@@ -1181,7 +1363,7 @@ export default function App() {
             />
 
             <Button
-              title="◖))  Read text aloud"
+              title="◖)) Read text aloud"
               onPress={() =>
                 readText.trim()
                   ? speak(readText.trim())
@@ -1218,6 +1400,7 @@ export default function App() {
         )}
 
         {/* SAFETY */}
+
         {tab === 'safety' && (
           <>
             <Header
@@ -1266,7 +1449,9 @@ export default function App() {
                 INDIA EMERGENCY NUMBER
               </Text>
 
-              <Text style={styles.emergencyNumberValue}>112</Text>
+              <Text style={styles.emergencyNumberValue}>
+                112
+              </Text>
 
               <Text style={styles.emergencyNumberDescription}>
                 If you are in immediate danger in India, use a real
@@ -1289,7 +1474,9 @@ export default function App() {
                   Important information
                 </Text>
 
-                <Text style={styles.message}>{sosNotice}</Text>
+                <Text style={styles.message}>
+                  {sosNotice}
+                </Text>
 
                 <Button
                   title="Dismiss message"
@@ -1302,6 +1489,7 @@ export default function App() {
         )}
 
         {/* SETTINGS */}
+
         {tab === 'settings' && (
           <>
             <Header
@@ -1444,6 +1632,7 @@ export default function App() {
       </ScrollView>
 
       {/* BOTTOM NAVIGATION */}
+
       <View style={styles.bottomNav}>
         {(
           ['home', 'talk', 'scan', 'navigate', 'settings'] as Tab[]
@@ -1472,9 +1661,7 @@ export default function App() {
               accessibilityRole="tab"
               accessibilityState={{ selected: active }}
               accessibilityLabel={labels[item]}
-              onPress={() =>
-                navigateTo(item, labels[item])
-              }
+              onPress={() => navigateTo(item, labels[item])}
               style={styles.navItem}
             >
               <View
@@ -1509,7 +1696,10 @@ export default function App() {
   );
 }
 
+// --------------------------------------------------
 // DESIGN SYSTEM
+// --------------------------------------------------
+
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
@@ -1591,6 +1781,7 @@ const styles = StyleSheet.create({
   },
 
   // HOME
+
   welcomeRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1852,6 +2043,7 @@ const styles = StyleSheet.create({
   },
 
   // PAGE HEADERS
+
   pageHeader: {
     marginBottom: 21
   },
@@ -1872,6 +2064,7 @@ const styles = StyleSheet.create({
   },
 
   // BUTTONS
+
   button: {
     backgroundColor: COLORS.violet,
     paddingVertical: 17,
@@ -1909,6 +2102,7 @@ const styles = StyleSheet.create({
   },
 
   // CHAT
+
   statusPill: {
     alignSelf: 'flex-start',
     backgroundColor: '#EBE3F0',
@@ -2022,6 +2216,7 @@ const styles = StyleSheet.create({
   },
 
   // INPUTS
+
   input: {
     backgroundColor: COLORS.surface,
     borderWidth: 1.5,
@@ -2045,6 +2240,7 @@ const styles = StyleSheet.create({
   },
 
   // SCANNER
+
   scanInfo: {
     backgroundColor: '#EFE6F5',
     borderRadius: 17,
@@ -2075,6 +2271,13 @@ const styles = StyleSheet.create({
 
   camera: {
     flex: 1
+  },
+
+  cameraStatus: {
+    color: COLORS.muted,
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 8
   },
 
   cameraPlaceholder: {
@@ -2144,6 +2347,7 @@ const styles = StyleSheet.create({
   },
 
   // NAVIGATION
+
   navigationPanel: {
     backgroundColor: COLORS.plum,
     borderRadius: 22,
@@ -2173,6 +2377,7 @@ const styles = StyleSheet.create({
   },
 
   // TEXT READER
+
   readPanel: {
     backgroundColor: '#F0E7F5',
     borderRadius: 21,
@@ -2220,6 +2425,7 @@ const styles = StyleSheet.create({
   },
 
   // EMERGENCY
+
   emergencyPanel: {
     backgroundColor: COLORS.plum,
     borderRadius: 23,
@@ -2287,6 +2493,7 @@ const styles = StyleSheet.create({
   },
 
   // SETTINGS
+
   settingsSection: {
     backgroundColor: COLORS.surface,
     borderRadius: 20,
@@ -2331,6 +2538,7 @@ const styles = StyleSheet.create({
   },
 
   // BOTTOM NAVIGATION
+
   bottomNav: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
