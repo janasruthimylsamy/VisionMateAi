@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "VisionMate AI",
+    "slug": "visionmate-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.visionmateai.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "VisionMate uses the camera when you ask it to identify an object or read text."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "VisionMate uses your location when you ask for nearby places or directions."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "VisionMate uses your microphone when you start voice input.",
+          "speechRecognitionPermission": "VisionMate converts your speech into text so you can use the app hands-free."
+        }
+      ]
+    ]
+  }
+}
