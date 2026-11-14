@@ -6,13 +6,12 @@ import cors from 'cors';
 const app = express();
 
 const port = Number(process.env.PORT || 3000);
-const apiKey = process.env.OLLAMA_API_KEY || '';
-const model = process.env.OLLAMA_MODEL || 'qwen3-vl:235b-cloud';
+const apiKey = process.env.GEMINI_API_KEY || '';
+const model = 'gemini-2.5-flash-lite';
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json({ limit: '12mb' }));
 
-// Home route
 app.get('/', (_req, res) => {
   res.json({
     service: 'VisionMate AI API',
@@ -20,19 +19,17 @@ app.get('/', (_req, res) => {
   });
 });
 
-// Health check
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'VisionMate AI API',
-    provider: 'Ollama Cloud',
+    provider: 'Google Gemini',
     aiConfigured: Boolean(apiKey),
     model,
     port
   });
 });
 
-// AI instructions
 const instructions = `You are VisionMate, a concise, respectful, safety-first voice assistant for blind and low-vision people.
 
 Speak in the user's requested language.
@@ -44,8 +41,7 @@ Do not claim to detect every obstacle or guarantee physical safety.
 For medicine, chemicals, food safety, financial or other high-stakes questions, clearly state limitations and recommend checking the original label or a qualified person.
 Do not pretend to be human.`;
 
-// Ollama Cloud AI function
-async function askOllama(
+async function askGemini(
   prompt: string,
   systemInstruction: string = instructions,
   image?: {
@@ -54,39 +50,41 @@ async function askOllama(
   }
 ): Promise<string> {
   if (!apiKey) {
-    throw new Error('OLLAMA_API_KEY is not configured.');
+    throw new Error('GEMINI_API_KEY is not configured.');
   }
 
-  const userMessage: any = {
-    role: 'user',
-    content: prompt
-  };
+  const parts: any[] = [];
 
-  // Attach image for vision models
   if (image) {
-    userMessage.images = [image.imageBase64];
+    parts.push({
+      inlineData: {
+        mimeType: image.mimeType,
+        data: image.imageBase64
+      }
+    });
   }
+
+  parts.push({ text: prompt });
 
   const response = await fetch(
-    'https://ollama.com/api/chat',
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
+        'x-goog-api-key': apiKey
       },
       body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: systemInstruction
-          },
-          userMessage
-        ],
-        stream: false,
-        options: {
-          temperature: 0.3
+        systemInstruction: {
+          parts: [{ text: systemInstruction }]
+        },
+        contents: [{
+          role: 'user',
+          parts
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 2048
         }
       }),
       signal: AbortSignal.timeout(120000)
@@ -97,27 +95,28 @@ async function askOllama(
 
   if (!response.ok) {
     console.error(
-      'Ollama API error:',
-      data?.error || response.status
+      'Gemini API error:',
+      data?.error?.message || response.status
     );
 
     throw new Error(
-      data?.error || `Ollama request failed: ${response.status}`
+      data?.error?.message || `Gemini request failed: ${response.status}`
     );
   }
 
-  const answer = String(
-    data?.message?.content || ''
-  ).trim();
+  const answer = (data?.candidates?.[0]?.content?.parts || [])
+    .map((part: any) => part.text || '')
+    .join('')
+    .trim();
 
   if (!answer) {
-    throw new Error('Ollama returned an empty response.');
+    throw new Error('Gemini returned an empty response.');
   }
 
   return answer;
 }
 
-// Basic per-instance rate limiting
+// Basic rate limiting
 const requestCounts = new Map<
   string,
   { count: number; resetAt: number }
@@ -135,7 +134,6 @@ app.use('/api', (req, res, next) => {
       count: 1,
       resetAt: now + 60000
     });
-
     next();
     return;
   }
@@ -151,7 +149,7 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// AI Chat endpoint
+// Chat
 app.post('/api/chat', async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim();
@@ -171,7 +169,7 @@ app.post('/api/chat', async (req, res) => {
       return;
     }
 
-    const answer = await askOllama(
+    const answer = await askGemini(
       `Respond in language locale: ${language}.\n\nUser message: ${message}`
     );
 
@@ -185,7 +183,7 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// Validate and prepare image input
+// Image validation
 function prepareImageData(
   imageInput: unknown,
   suppliedMimeType: unknown
@@ -198,7 +196,6 @@ function prepareImageData(
     suppliedMimeType || 'image/jpeg'
   ).toLowerCase();
 
-  // Accept complete data URL or plain Base64
   if (imageBase64.startsWith('data:')) {
     const match = imageBase64.match(
       /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i
@@ -212,12 +209,8 @@ function prepareImageData(
     imageBase64 = match[2];
   }
 
-  if (
-    !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)
-  ) {
-    throw new Error(
-      'Unsupported image format. Use JPEG, PNG or WebP.'
-    );
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+    throw new Error('Unsupported image format. Use JPEG, PNG or WebP.');
   }
 
   imageBase64 = imageBase64.replace(/\s/g, '');
@@ -225,9 +218,7 @@ function prepareImageData(
   if (
     !imageBase64 ||
     imageBase64.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      imageBase64
-    )
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(imageBase64)
   ) {
     throw new Error('The image is not valid Base64 data.');
   }
@@ -239,12 +230,9 @@ function prepareImageData(
   }
 
   if (imageBuffer.length > 7 * 1024 * 1024) {
-    throw new Error(
-      'Image is too large. Please capture a smaller image.'
-    );
+    throw new Error('Image is too large. Please capture a smaller image.');
   }
 
-  // Verify actual image format
   const isJpeg =
     imageBuffer[0] === 0xff &&
     imageBuffer[1] === 0xd8 &&
@@ -275,10 +263,7 @@ function prepareImageData(
     );
   }
 
-  return {
-    imageBase64,
-    mimeType
-  };
+  return { imageBase64, mimeType };
 }
 
 function isImageValidationError(message: string): boolean {
@@ -292,7 +277,7 @@ function isImageValidationError(message: string): boolean {
   );
 }
 
-// Smart Object Scanner endpoint
+// Object Scanner
 app.post('/api/describe-image', async (req, res) => {
   try {
     const imageInput = req.body?.imageBase64;
@@ -319,11 +304,7 @@ Do not guess brand, ingredients, expiry date, medicine identity or safety-critic
 Keep the spoken response concise and practical.
 Never claim the image can establish whether an area is safe to walk through.`;
 
-    const description = await askOllama(
-      prompt,
-      instructions,
-      image
-    );
+    const description = await askGemini(prompt, instructions, image);
 
     res.json({ description });
   } catch (error: any) {
@@ -342,7 +323,7 @@ Never claim the image can establish whether an area is safe to walk through.`;
   }
 });
 
-// Read Text / OCR endpoint
+// OCR / Read Text
 app.post('/api/read-text', async (req, res) => {
   try {
     const imageInput = req.body?.imageBase64;
@@ -364,7 +345,7 @@ Task: Extract and transcribe the visible text in this image.
 Requested language/locale: ${language}.
 
 Rules:
-- Return only the text that is actually visible in this image.
+- Return only the text actually visible in this image.
 - Preserve the original language and wording. Do not translate.
 - Preserve paragraph breaks and useful line breaks.
 - Include headings, labels, numbers and punctuation when legible.
@@ -373,9 +354,9 @@ Rules:
 - Never invent words or guess unclear characters.
 - If a small portion is unreadable, write [unclear] at that position.
 - If no readable text is visible, return exactly: NO_READABLE_TEXT
-- Do not add an introduction or a conclusion.`;
+- Do not add an introduction or conclusion.`;
 
-    const extractedText = await askOllama(
+    const extractedText = await askGemini(
       prompt,
       'You accurately transcribe text from supplied images. Never invent missing text.',
       image
@@ -415,9 +396,8 @@ Rules:
   }
 });
 
-// Start server
 app.listen(port, () => {
   console.log(`VisionMate API listening on port ${port}`);
-  console.log('AI provider: Ollama Cloud');
+  console.log('AI provider: Google Gemini');
   console.log(`AI model: ${model}`);
 });
