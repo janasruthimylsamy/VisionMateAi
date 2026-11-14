@@ -6,38 +6,28 @@ import cors from 'cors';
 const app = express();
 
 const port = Number(process.env.PORT || 3000);
-const secret = process.env.API_SECRET || '';
-
-const ollamaUrl = (
-  process.env.OLLAMA_URL || 'http://127.0.0.1:11434'
-).replace(/\/+$/, '');
-
-const model = process.env.OLLAMA_MODEL || 'qwen2.5vl:3b';
+const apiKey = process.env.GEMINI_API_KEY || '';
+const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json({ limit: '12mb' }));
+
+app.get('/', (_req, res) => {
+  res.json({
+    service: 'VisionMate AI API',
+    status: 'running'
+  });
+});
 
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'VisionMate AI API',
-    provider: 'Ollama (local AI)',
-    aiConfigured: Boolean(ollamaUrl && model),
+    provider: 'Google Gemini',
+    aiConfigured: Boolean(apiKey),
     model,
     port
   });
-});
-
-// Protect API endpoints
-app.use('/api', (req, res, next) => {
-  if (!secret || req.header('x-app-secret') !== secret) {
-    res.status(401).json({
-      error: 'App authentication failed. Check the app/server secret configuration.'
-    });
-    return;
-  }
-
-  next();
 });
 
 const instructions = `You are VisionMate, a concise, respectful, safety-first voice assistant for blind and low-vision people.
@@ -51,43 +41,113 @@ Do not claim to detect every obstacle or guarantee physical safety.
 For medicine, chemicals, food safety, financial or other high-stakes questions, clearly state limitations and recommend checking the original label or a qualified person.
 Do not pretend to be human.`;
 
-// Common local Ollama request
-async function askOllama(
-  messages: Array<{
-    role: 'system' | 'user';
-    content: string;
-    images?: string[];
-  }>
+async function askGemini(
+  prompt: string,
+  systemInstruction: string = instructions,
+  image?: {
+    imageBase64: string;
+    mimeType: string;
+  }
 ): Promise<string> {
-  const response = await fetch(`${ollamaUrl}/api/chat`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false
-    }),
-    signal: AbortSignal.timeout(300000)
-  });
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY is not configured.');
+  }
+
+  const parts: any[] = [{ text: prompt }];
+
+  if (image) {
+    parts.push({
+      inlineData: {
+        mimeType: image.mimeType,
+        data: image.imageBase64
+      }
+    });
+  }
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemInstruction }]
+        },
+        contents: [
+          {
+            role: 'user',
+            parts
+          }
+        ],
+        generationConfig: {
+          temperature: 0.3
+        }
+      }),
+      signal: AbortSignal.timeout(120000)
+    }
+  );
 
   const data: any = await response.json();
 
   if (!response.ok) {
+    console.error(
+      'Gemini API error:',
+      data?.error?.message || response.status
+    );
+
     throw new Error(
-      data?.error || `Ollama request failed: ${response.status}`
+      data?.error?.message || `Gemini request failed: ${response.status}`
     );
   }
 
-  const answer = data?.message?.content;
+  const answer = data?.candidates?.[0]?.content?.parts
+    ?.map((part: any) => part.text || '')
+    .join('')
+    .trim();
 
-  if (!answer || typeof answer !== 'string') {
-    throw new Error('Ollama returned an empty response.');
+  if (!answer) {
+    throw new Error('Gemini returned an empty response.');
   }
 
-  return answer.trim();
+  return answer;
 }
+
+// Basic per-instance rate limiting
+const requestCounts = new Map<
+  string,
+  { count: number; resetAt: number }
+>();
+
+app.set('trust proxy', 1);
+
+app.use('/api', (req, res, next) => {
+  const ip = req.ip || 'unknown';
+  const now = Date.now();
+  const current = requestCounts.get(ip);
+
+  if (!current || now > current.resetAt) {
+    requestCounts.set(ip, {
+      count: 1,
+      resetAt: now + 60000
+    });
+
+    next();
+    return;
+  }
+
+  if (current.count >= 20) {
+    res.status(429).json({
+      error: 'Too many requests. Please wait a minute and try again.'
+    });
+    return;
+  }
+
+  current.count += 1;
+  next();
+});
 
 // Chat endpoint
 app.post('/api/chat', async (req, res) => {
@@ -96,41 +156,41 @@ app.post('/api/chat', async (req, res) => {
     const language = String(req.body?.language || 'en-IN');
 
     if (!message) {
-      res.status(400).json({ error: 'Message is required.' });
+      res.status(400).json({
+        error: 'Message is required.'
+      });
       return;
     }
 
     if (message.length > 5000) {
-      res.status(413).json({ error: 'Message is too long.' });
+      res.status(413).json({
+        error: 'Message is too long.'
+      });
       return;
     }
 
-    const answer = await askOllama([
-      {
-        role: 'system',
-        content: `${instructions}\nRespond in language locale: ${language}.`
-      },
-      {
-        role: 'user',
-        content: message
-      }
-    ]);
+    const answer = await askGemini(
+      `Respond in language locale: ${language}.\n\nUser message: ${message}`
+    );
 
     res.json({ answer });
   } catch (error: any) {
     console.error('chat_error:', error?.message || error);
 
     res.status(502).json({
-      error: 'The local AI service could not complete your request. Check that Ollama is running.'
+      error: 'The AI service could not complete your request. Please try again.'
     });
   }
 });
 
-// Validate and prepare image input for Ollama
+// Validate and prepare image input
 function prepareImageData(
   imageInput: unknown,
   suppliedMimeType: unknown
-): { imageBase64: string; mimeType: string } {
+): {
+  imageBase64: string;
+  mimeType: string;
+} {
   let imageBase64 = String(imageInput || '').trim();
   let mimeType = String(suppliedMimeType || 'image/jpeg').toLowerCase();
 
@@ -157,7 +217,9 @@ function prepareImageData(
   if (
     !imageBase64 ||
     imageBase64.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(imageBase64)
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      imageBase64
+    )
   ) {
     throw new Error('The image is not valid Base64 data.');
   }
@@ -203,7 +265,21 @@ function prepareImageData(
     );
   }
 
-  return { imageBase64, mimeType };
+  return {
+    imageBase64,
+    mimeType
+  };
+}
+
+function isImageValidationError(message: string): boolean {
+  return (
+    message.includes('Invalid image') ||
+    message.includes('Base64') ||
+    message.includes('Unsupported image') ||
+    message.includes('Image content') ||
+    message.includes('too large') ||
+    message.includes('empty')
+  );
 }
 
 // Smart Object Scanner endpoint
@@ -220,7 +296,7 @@ app.post('/api/describe-image', async (req, res) => {
       return;
     }
 
-    const { imageBase64 } = prepareImageData(imageInput, mimeType);
+    const image = prepareImageData(imageInput, mimeType);
 
     const prompt = `Describe this image for a blind or low-vision user in locale ${language}.
 
@@ -233,17 +309,11 @@ Do not guess brand, ingredients, expiry date, medicine identity or safety-critic
 Keep the spoken response concise and practical.
 Never claim the image can establish whether an area is safe to walk through.`;
 
-    const description = await askOllama([
-      {
-        role: 'system',
-        content: instructions
-      },
-      {
-        role: 'user',
-        content: prompt,
-        images: [imageBase64]
-      }
-    ]);
+    const description = await askGemini(
+      prompt,
+      instructions,
+      image
+    );
 
     res.json({ description });
   } catch (error: any) {
@@ -251,25 +321,18 @@ Never claim the image can establish whether an area is safe to walk through.`;
 
     const message = String(error?.message || '');
 
-    if (
-      message.includes('Invalid image') ||
-      message.includes('Base64') ||
-      message.includes('Unsupported image') ||
-      message.includes('Image content') ||
-      message.includes('too large') ||
-      message.includes('empty')
-    ) {
+    if (isImageValidationError(message)) {
       res.status(400).json({ error: message });
       return;
     }
 
     res.status(502).json({
-      error: 'Image analysis failed. Check that Ollama is running and the model is available.'
+      error: 'Image analysis failed. Please try again.'
     });
   }
 });
 
-// NEW: Read Text / OCR endpoint
+// Read Text / OCR endpoint
 app.post('/api/read-text', async (req, res) => {
   try {
     const imageInput = req.body?.imageBase64;
@@ -283,12 +346,11 @@ app.post('/api/read-text', async (req, res) => {
       return;
     }
 
-    const { imageBase64 } = prepareImageData(imageInput, mimeType);
+    const image = prepareImageData(imageInput, mimeType);
 
     const prompt = `You are an OCR transcription system for a blind or low-vision user.
 
 Task: Extract and transcribe the visible text in this image.
-
 Requested language/locale: ${language}.
 
 Rules:
@@ -303,17 +365,11 @@ Rules:
 - If no readable text is visible, return exactly: NO_READABLE_TEXT
 - Do not add an introduction or a conclusion.`;
 
-    const extractedText = await askOllama([
-      {
-        role: 'system',
-        content: 'You accurately transcribe text from supplied images. Never invent missing text.'
-      },
-      {
-        role: 'user',
-        content: prompt,
-        images: [imageBase64]
-      }
-    ]);
+    const extractedText = await askGemini(
+      prompt,
+      'You accurately transcribe text from supplied images. Never invent missing text.',
+      image
+    );
 
     const cleanedText = extractedText
       .replace(/^```(?:text)?\s*/i, '')
@@ -326,7 +382,8 @@ Rules:
     ) {
       res.json({
         text: '',
-        message: 'No readable text was found. Try capturing the page again with better lighting and focus.'
+        message:
+          'No readable text was found. Try capturing the page again with better lighting and focus.'
       });
       return;
     }
@@ -337,27 +394,19 @@ Rules:
 
     const message = String(error?.message || '');
 
-    if (
-      message.includes('Invalid image') ||
-      message.includes('Base64') ||
-      message.includes('Unsupported image') ||
-      message.includes('Image content') ||
-      message.includes('too large') ||
-      message.includes('empty')
-    ) {
+    if (isImageValidationError(message)) {
       res.status(400).json({ error: message });
       return;
     }
 
     res.status(502).json({
-      error: 'Text extraction failed. Check that Ollama is running and the vision model is available.'
+      error: 'Text extraction failed. Please try again.'
     });
   }
 });
 
 app.listen(port, () => {
   console.log(`VisionMate API listening on port ${port}`);
-  console.log('AI provider: Ollama');
+  console.log('AI provider: Google Gemini');
   console.log(`AI model: ${model}`);
-  console.log(`Ollama URL: ${ollamaUrl}`);
 });

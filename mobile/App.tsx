@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet,
@@ -12,11 +13,10 @@ import {
   useSpeechRecognitionEvent
 } from 'expo-speech-recognition';
 
-// Change this to your computer's LAN IP when testing on a physical Android phone.
+// PUBLIC BACKEND URL
 const API_BASE =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:3000';
-
-const APP_SECRET = process.env.EXPO_PUBLIC_APP_SECRET || '';
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  'https://visionmateai-server.vercel.app';
 
 const languages = [
   { code: 'en-IN', name: 'English' },
@@ -95,7 +95,6 @@ export default function App() {
     languages.find(item => item.code === language) || languages[0];
 
   // SPEECH OUTPUT
-
   const speak = (text: string) => {
     Speech.stop();
 
@@ -107,7 +106,6 @@ export default function App() {
   };
 
   // SPEECH RECOGNITION EVENTS
-
   useSpeechRecognitionEvent('start', () => setListening(true));
 
   useSpeechRecognitionEvent('end', () => setListening(false));
@@ -143,7 +141,6 @@ export default function App() {
   });
 
   // INITIAL SETUP
-
   useEffect(() => {
     if (Platform.OS !== 'web') {
       SecureStore.getItemAsync('trusted_contact')
@@ -167,7 +164,6 @@ export default function App() {
   }, []);
 
   // VOICE INPUT
-
   const startListening = async () => {
     try {
       const permission =
@@ -193,13 +189,11 @@ export default function App() {
   };
 
   // BACKEND CONNECTION
-
   const callApi = async (path: string, body: any) => {
     const response = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-app-secret': APP_SECRET
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
     });
@@ -216,7 +210,6 @@ export default function App() {
   };
 
   // AI CHAT
-
   const askAI = async (text: string) => {
     if (!text.trim() || busy) return;
 
@@ -263,7 +256,6 @@ export default function App() {
   };
 
   // VOICE COMMANDS
-
   const handleVoiceCommand = (text: string) => {
     const lower = text.toLowerCase();
 
@@ -297,7 +289,6 @@ export default function App() {
   };
 
   // CAMERA OBJECT RECOGNITION
-
   const scanObject = async () => {
     if (!cameraPermission?.granted) {
       const permission = await requestCameraPermission();
@@ -350,7 +341,6 @@ export default function App() {
   };
 
   // CAMERA TEXT RECOGNITION / OCR
-
   const scanText = async () => {
     if (readBusy) return;
 
@@ -420,7 +410,6 @@ export default function App() {
   };
 
   // WALKING DIRECTIONS
-
   const openWalkingDirections = async () => {
     if (!destination.trim()) {
       speak('Please enter or say a destination first.');
@@ -462,7 +451,6 @@ export default function App() {
   };
 
   // EMERGENCY DIALER
-
   const openEmergencyDialer = async (number: string) => {
     if (Platform.OS === 'web') {
       const message =
@@ -571,7 +559,6 @@ export default function App() {
   };
 
   // REUSABLE UI COMPONENTS
-
   const Header = ({
     title,
     desc
@@ -660,7 +647,6 @@ export default function App() {
   };
 
   // MAIN SCREEN
-
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar
@@ -669,7 +655,6 @@ export default function App() {
       />
 
       {/* TOP BRAND HEADER */}
-
       <View style={styles.topbar}>
         <View style={styles.brandRow}>
           <View style={styles.brandLogo}>
@@ -706,7 +691,6 @@ export default function App() {
         showsVerticalScrollIndicator={false}
       >
         {/* HOME */}
-
         {tab === 'home' && (
           <>
             <View style={styles.welcomeRow}>
@@ -843,7 +827,6 @@ export default function App() {
         )}
 
         {/* TALK TO AI */}
-
         {tab === 'talk' && (
           <>
             <Header
@@ -956,7 +939,6 @@ export default function App() {
         )}
 
         {/* OBJECT SCANNER */}
-
         {tab === 'scan' && (
           <>
             <Header
@@ -1049,7 +1031,6 @@ export default function App() {
         )}
 
         {/* NAVIGATION */}
-
         {tab === 'navigate' && (
           <>
             <Header
@@ -1111,7 +1092,6 @@ export default function App() {
         )}
 
         {/* READ TEXT / OCR */}
-
         {tab === 'read' && (
           <>
             <Header
@@ -1238,7 +1218,6 @@ export default function App() {
         )}
 
         {/* SAFETY */}
-
         {tab === 'safety' && (
           <>
             <Header
@@ -1323,7 +1302,6 @@ export default function App() {
         )}
 
         {/* SETTINGS */}
-
         {tab === 'settings' && (
           <>
             <Header
@@ -1466,7 +1444,6 @@ export default function App() {
       </ScrollView>
 
       {/* BOTTOM NAVIGATION */}
-
       <View style={styles.bottomNav}>
         {(
           ['home', 'talk', 'scan', 'navigate', 'settings'] as Tab[]
@@ -1533,7 +1510,6 @@ export default function App() {
 }
 
 // DESIGN SYSTEM
-
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
@@ -1615,7 +1591,6 @@ const styles = StyleSheet.create({
   },
 
   // HOME
-
   welcomeRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1877,7 +1852,6 @@ const styles = StyleSheet.create({
   },
 
   // PAGE HEADERS
-
   pageHeader: {
     marginBottom: 21
   },
@@ -1898,7 +1872,6 @@ const styles = StyleSheet.create({
   },
 
   // BUTTONS
-
   button: {
     backgroundColor: COLORS.violet,
     paddingVertical: 17,
@@ -1936,7 +1909,6 @@ const styles = StyleSheet.create({
   },
 
   // CHAT
-
   statusPill: {
     alignSelf: 'flex-start',
     backgroundColor: '#EBE3F0',
@@ -2050,7 +2022,6 @@ const styles = StyleSheet.create({
   },
 
   // INPUTS
-
   input: {
     backgroundColor: COLORS.surface,
     borderWidth: 1.5,
@@ -2074,7 +2045,6 @@ const styles = StyleSheet.create({
   },
 
   // SCANNER
-
   scanInfo: {
     backgroundColor: '#EFE6F5',
     borderRadius: 17,
@@ -2174,7 +2144,6 @@ const styles = StyleSheet.create({
   },
 
   // NAVIGATION
-
   navigationPanel: {
     backgroundColor: COLORS.plum,
     borderRadius: 22,
@@ -2204,7 +2173,6 @@ const styles = StyleSheet.create({
   },
 
   // TEXT READER
-
   readPanel: {
     backgroundColor: '#F0E7F5',
     borderRadius: 21,
@@ -2252,7 +2220,6 @@ const styles = StyleSheet.create({
   },
 
   // EMERGENCY
-
   emergencyPanel: {
     backgroundColor: COLORS.plum,
     borderRadius: 23,
@@ -2320,7 +2287,6 @@ const styles = StyleSheet.create({
   },
 
   // SETTINGS
-
   settingsSection: {
     backgroundColor: COLORS.surface,
     borderRadius: 20,
@@ -2365,7 +2331,6 @@ const styles = StyleSheet.create({
   },
 
   // BOTTOM NAVIGATION
-
   bottomNav: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
